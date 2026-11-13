@@ -1,0 +1,104 @@
+# The agent model: an OpenShift AI LLMInferenceService behind the MaaS gateway.
+#
+# Same shape as rhoai-maas-guide/manifests/05-maas-models/gpt-oss-20b, with the
+# vLLM flags Coder Agents need. Sized for ONE 24 GB GPU (A10G / L4).
+#
+# Why not the guide's gpt-oss-20b? It is pinned to --max-model-len 8192.
+# Coder asks for max_tokens=32000 on every request, so it needs ~40k.
+#
+# Choices, each one learned the hard way:
+#
+#   Qwen2.5-14B-Instruct, not a "Coder" variant. Qwen2.5-Coder 7B and 14B
+#   failed tool_choice=auto 0/4: they echo the <tools> tag instead of
+#   emitting <tool_call>. The general Instruct line got it right 4/4.
+#
+#   AWQ 4-bit: bf16 14B is ~29 GB. FP8 needs compute capability 8.9+, which
+#   an A10G (8.6) does not have.
+#
+#   --enable-auto-tool-choice + --tool-call-parser hermes: without these the
+#   model connects to Coder fine and then never acts.
+#
+#   --max-model-len 40960: vLLM counts prompt + output against max_model_len,
+#   so 40960 leaves ~9k for the prompt (system prompt, tool schemas, AGENTS.md,
+#   the weather CSVs). Costs no extra GPU memory.
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: qwen25-14b
+  annotations:
+    openshift.io/display-name: "Qwen2.5 14B Instruct (AWQ) — agent model"
+    opendatahub.io/model-type: generative
+    # Only reachable with a MaaS API key / OpenShift token.
+    security.opendatahub.io/enable-auth: "true"
+  labels:
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/genai-asset: "true"
+spec:
+  replicas: 1
+  model:
+    # The served model name ({{.Name}} below). Coder uses it on the per-model
+    # URL https://maas.<domain>/llm/qwen25-14b/v1 (QUICKSTART step 2).
+    name: qwen2.5-14b
+    # hf:// pulls from Hugging Face on first start (ungated, ~10 GB). For a
+    # disconnected cluster, mirror it into an OCI ModelCar and use oci://.
+    uri: hf://Qwen/Qwen2.5-14B-Instruct-AWQ
+  router:
+    route: {}
+    # Attach to the MaaS gateway, not the default one: that's what puts API
+    # keys, subscriptions and token rate limits in front of the model.
+    gateway:
+      refs:
+        - name: maas-default-gateway
+          namespace: openshift-ingress
+  template:
+    tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Exists
+    containers:
+      - name: main
+        # Red Hat AI Inference Server (vLLM CUDA), same digest as the
+        # rhoai-maas-guide models. The flags are explicit args, as in the
+        # guide, rather than VLLM_ADDITIONAL_ARGS.
+        image: registry.redhat.io/rhaii/vllm-cuda-rhel9@sha256:5800e12b2a465f15961fcf34b645d79ed4f91ec9161eab22b1205d12682183c8
+        command: [python, -m, vllm.entrypoints.openai.api_server]
+        args:
+          - "--served-model-name={{.Name}}"
+          - --model=/mnt/models
+          - --enable-ssl-refresh
+          - --ssl-certfile=/var/run/kserve/tls/tls.crt
+          - --ssl-keyfile=/var/run/kserve/tls/tls.key
+          # MaaS counts tokens from the usage block, also on streamed replies.
+          - --enable-force-include-usage
+          - --max-model-len=40960
+          - --enable-auto-tool-choice
+          - --tool-call-parser=hermes
+          - --gpu-memory-utilization=0.90
+        ports:
+          - {containerPort: 8000, name: http, protocol: TCP}
+        livenessProbe:
+          httpGet: {path: /health, port: 8000, scheme: HTTPS}
+          initialDelaySeconds: 300
+          periodSeconds: 30
+          timeoutSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet: {path: /health, port: 8000, scheme: HTTPS}
+          initialDelaySeconds: 120
+          periodSeconds: 15
+          timeoutSeconds: 15
+          failureThreshold: 40
+        resources:
+          requests:
+            cpu: "2"
+            memory: 12Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "6"
+            memory: 24Gi
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - {mountPath: /dev/shm, name: shm}
+    volumes:
+      - name: shm
+        emptyDir: {medium: Memory, sizeLimit: 2Gi}

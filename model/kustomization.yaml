@@ -1,0 +1,7 @@
+# oc apply -k model/
+# Needs MaaS installed first (https://github.com/rh-aiservices-bu/rhoai-maas-guide): scripts/setup-maas.sh --skip-models
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - llm
+  - maas

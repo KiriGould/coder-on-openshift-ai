@@ -1,0 +1,48 @@
+# Put the weather server behind the MCP gateway (mcp-gateway-guide phase 4).
+#
+# Applied by mcp/apply.sh after 01-gateway.yaml.
+#
+# The HTTPRoute attaches to the gateway's internal `mcps` listener. Its
+# hostname is a routing key inside the gateway, not a DNS name -- it is never
+# resolved and needs no Route or certificate.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: weather-mcp-route
+  namespace: mcp-servers
+  labels:
+    mcp-server: "true"
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: mcp-gateway
+      namespace: gateway-system
+      sectionName: mcps
+  hostnames:
+    - weather.mcp.local
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: weather-mcp
+          port: 8080
+---
+# Federates the tools into the gateway under a prefix: history becomes
+# weather_history, forecast becomes weather_forecast, and so on. A second
+# server registered the same way shows up behind the same URL in Coder.
+apiVersion: mcp.kuadrant.io/v1
+kind: MCPServerRegistration
+metadata:
+  name: weather-mcp
+  namespace: mcp-servers
+spec:
+  prefix: "weather_"
+  path: /mcp
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: weather-mcp-route
+    namespace: mcp-servers

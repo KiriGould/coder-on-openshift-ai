@@ -1,0 +1,89 @@
+# Coder workspace image for EDA notebooks: arbitrary-UID safe, with pandas,
+# matplotlib, a Jupyter kernel, VS Code (code-server) + the Python and Jupyter
+# extensions, nb-build, and the context Coder Agents read (AGENTS.md, skills).
+#
+# No agent software in here on purpose. Coder Agents run the agent loop in
+# the control plane and only use the workspace to read, write and run code,
+# so the workspace holds no model endpoint, API key or agent install.
+#
+# ARBITRARY UID
+#    OpenShift's restricted-v2 SCC runs the container as a random UID from the
+#    project's range. That UID has no /etc/passwd entry, so `whoami` fails,
+#    $HOME misresolves, and git refuses to work. Fixed the standard OpenShift
+#    way -- own things by GID 0, make them group-writable, and have the
+#    entrypoint append a passwd entry. Granting `anyuid` instead would
+#    undermine the security story.
+
+FROM registry.access.redhat.com/ubi9/ubi:latest
+
+# `curl` is deliberately absent: UBI9 ships curl-minimal, which already
+# provides /usr/bin/curl, and asking for `curl` makes dnf fail with a file
+# conflict.
+RUN dnf -y install --setopt=install_weak_deps=False \
+        git unzip procps-ng \
+        python3.12 python3.12-pip \
+        openssh-clients jq tar gzip \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# UBI9's default python3 is 3.9. Agents type `python3` and `pip`, so point
+# those at 3.12 -- otherwise the libraries below "aren't installed".
+RUN ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
+    && ln -sf /usr/bin/pip3.12 /usr/local/bin/pip3 \
+    && ln -sf /usr/bin/pip3.12 /usr/local/bin/pip
+
+# Preinstalled so the agent doesn't spend its turns (and the workspace its
+# egress) on `pip install`, and so every run uses the same versions.
+COPY requirements.txt /tmp/requirements.txt
+RUN python3.12 -m pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+# The python3 kernel VS Code's Jupyter extension and nb-build run on.
+RUN python3.12 -m ipykernel install --prefix /usr/local --name python3 --display-name "Python 3.12"
+
+# ---- VS Code in the browser -------------------------------------------------
+# Baked in rather than curl-installed at workspace start: no egress from the
+# workspace, and the editor is up in seconds. Extensions come from Open VSX
+# (code-server's marketplace) into a shared, read-only-to-users directory.
+ARG CODE_SERVER_VERSION=4.145.2
+RUN curl -fsSL "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-amd64.tar.gz" \
+      | tar -xz -C /opt \
+    && mv "/opt/code-server-${CODE_SERVER_VERSION}-linux-amd64" /opt/code-server \
+    && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
+    && code-server --extensions-dir /opt/code-server/extensions \
+         --install-extension ms-python.python \
+         --install-extension ms-toolsai.jupyter \
+    && code-server --extensions-dir /opt/code-server/extensions --list-extensions \
+    && rm -rf /root/.local/share/code-server /root/.cache
+
+# nb-build: `# %%` .py -> executed .ipynb. Small models write plain Python
+# far more reliably than notebook JSON.
+COPY nb-build /usr/local/bin/nb-build
+# AGENTS.md + skills, seeded into the home volume by the template's
+# startup script (copied only if missing, so user edits survive).
+COPY agent-context /opt/agent-context
+RUN chmod 0755 /usr/local/bin/nb-build && chmod -R a+rX /opt/agent-context /opt/code-server
+
+RUN useradd -u 1000 -g 0 -m -d /home/coder -s /bin/bash coder
+
+# Group 0 + group-writable: the arbitrary UID always lands in GID 0 on
+# OpenShift, which is what makes these writable.
+RUN chgrp -R 0 /home/coder /etc/passwd \
+    && chmod -R g=u /home/coder \
+    && chmod g=u /etc/passwd
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Matplotlib writes a font cache to $MPLCONFIGDIR; without it, a random UID
+# gets a warning on every import and a slow first plot.
+# NOT MPLBACKEND=Agg: it overrides the notebook inline backend and every
+# figure silently disappears. Headless scripts fall back to Agg on their own.
+ENV HOME=/home/coder \
+    MPLCONFIGDIR=/tmp/matplotlib
+WORKDIR /home/coder
+USER 1000
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["sleep", "infinity"]

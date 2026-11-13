@@ -1,0 +1,96 @@
+---
+# Postgres for the Coder control plane.
+#
+# Deliberately a plain StatefulSet rather than cloudnative-pg: this is a demo
+# database holding workspace metadata, and an operator adds a moving part
+# without adding anything the demo shows. For production, use
+# cloudnative-pg or crunchy-postgres-operator -- both are available as
+# Certified operators on this cluster.
+#
+# Uses the RHEL 9 Postgres image, which is already covered by the cluster's
+# global pull secret and runs cleanly under OpenShift's arbitrary-UID model.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: coder-db
+  namespace: coder
+type: Opaque
+stringData:
+  # Replaced at apply time by coder/deploy.sh with a generated password.
+  password: CHANGEME
+  user: coder
+  database: coder
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coder-db
+  namespace: coder
+spec:
+  selector:
+    app.kubernetes.io/name: coder-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: coder-db
+  namespace: coder
+spec:
+  serviceName: coder-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coder-db
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coder-db
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: registry.redhat.io/rhel9/postgresql-16:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: POSTGRESQL_USER
+              valueFrom: {secretKeyRef: {name: coder-db, key: user}}
+            - name: POSTGRESQL_PASSWORD
+              valueFrom: {secretKeyRef: {name: coder-db, key: password}}
+            - name: POSTGRESQL_DATABASE
+              valueFrom: {secretKeyRef: {name: coder-db, key: database}}
+          ports:
+            - containerPort: 5432
+              name: postgres
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/pgsql/data
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits:   {cpu: "2",  memory: 2Gi}
+          readinessProbe:
+            exec:
+              command: ["/usr/libexec/check-container"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # No storageClassName: the cluster's default StorageClass is used.
+        resources:
+          requests:
+            storage: 10Gi

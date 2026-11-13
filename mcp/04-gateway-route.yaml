@@ -1,0 +1,30 @@
+---
+# QUICKSTART step 3.
+# Exposes the gateway's client endpoint at https://mcp.<domain>/mcp.
+#
+# Coder could call the gateway's in-cluster Service directly, but a Route
+# gives one URL that works from Coder, a laptop (MCP Inspector, curl) and the
+# OIDC path alike. Applied by mcp/apply.sh, which fills in the hostname.
+#
+# The Service is named <gateway>-<gatewayclass> by the OpenShift gateway
+# controller. Confirm with: oc get svc -n gateway-system
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mcp
+  namespace: gateway-system
+  annotations:
+    # streamable_http holds the response open while a tool runs; the
+    # router's 30s default cuts slow tool calls off.
+    haproxy.router.openshift.io/timeout: 5m
+spec:
+  host: MCP_HOSTNAME
+  to:
+    kind: Service
+    name: mcp-gateway-GATEWAY_CLASS
+  port:
+    # Numeric: the generated Service names its ports, and the name is not ours.
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

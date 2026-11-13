@@ -1,0 +1,108 @@
+# The MCP gateway: one front door for every MCP server (QUICKSTART step 3).
+#
+# Follows mcp-gateway-guide phases 2-3 on "Track B": the cluster already has a
+# Gateway API class from the Ingress Operator -- OpenShift AI creates
+# `data-science-gateway-class`, MaaS setups use `openshift-default` -- so no
+# OSSM3 / Istio install, and RHCL 1.5's mcp.kuadrant.io/v1 API. The MCP gateway
+# runs on that class, next to OpenShift AI's own gateway.
+#
+# Needs Red Hat Connectivity Link 1.5+ -- mcp/00-rhcl-operator.yaml, or
+# rhoai-maas-guide/scripts/setup-maas.sh (which installs it too).
+#
+# MCP_HOSTNAME (mcp.<cluster-domain>) and GATEWAY_CLASS are filled in by
+# mcp/apply.sh, which picks the class that exists on the cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-servers
+---
+# Traffic crosses this Gateway twice:
+#   mcp   inbound   clients (Coder) -> broker
+#   mcps  outbound  broker -> each MCP server, picked by its *.mcp.local hostname
+# *.mcp.local is a routing key, never resolved by DNS.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: mcp-gateway
+  namespace: gateway-system
+spec:
+  gatewayClassName: GATEWAY_CLASS
+  # Generated Service as ClusterIP: clients come in through the Route
+  # (04-gateway-route.yaml). Next to MaaS on a cluster without a cloud load
+  # balancer this is required: a LoadBalancer Service here takes the single
+  # MetalLB address the MaaS gateway needs (mcp-gateway-guide, rhcl-15.adoc).
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: mcp-gateway-infra
+  listeners:
+    - name: mcp
+      hostname: "MCP_HOSTNAME"
+      port: 8080
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: mcps
+      hostname: "*.mcp.local"
+      port: 8080
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-gateway-infra
+  namespace: gateway-system
+data:
+  service: |
+    spec:
+      type: ClusterIP
+---
+# The extension lives in mcp-system and targets a Gateway in gateway-system;
+# across namespaces the ReferenceGrant is mandatory.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-mcp-extension
+  namespace: gateway-system
+spec:
+  from:
+    - group: mcp.kuadrant.io
+      kind: MCPGatewayExtension
+      namespace: mcp-system
+  to:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+---
+apiVersion: mcp.kuadrant.io/v1
+kind: MCPGatewayExtension
+metadata:
+  name: mcp
+  namespace: mcp-system
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: mcp-gateway
+    namespace: gateway-system
+    sectionName: mcp
+  httpRouteManagement: Enabled
+  # Where the broker hair-pins tools/call back into the Gateway. RHCL 1.5
+  # derives this correctly; set explicitly because a wrong value fails ONLY
+  # on tools/call (initialize and tools/list still work). The Service is
+  # <gateway>-<gatewayclass>: check with `oc get svc -n gateway-system`.
+  privateHost: mcp-gateway-GATEWAY_CLASS.gateway-system.svc.cluster.local:8080

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+# nb-build NOTEBOOK.py  ->  NOTEBOOK.ipynb, executed, outputs saved.
+#
+# Write the notebook as plain Python with cells marked `# %%` (code) and
+# `# %% [markdown]` (markdown). Never hand-write .ipynb JSON.
+# Cells run from the notebook's directory, so ../data/x.csv works from notebooks/.
+# On failure: prints the failing cell and its error, saves what ran so far,
+# exits 1. Fix the .py and run again.
+set -uo pipefail
+
+src="${1:?usage: nb-build path/to/notebook.py}"
+[ -f "$src" ] || { echo "nb-build: no such file: $src" >&2; exit 2; }
+case "$src" in *.py) ;; *) echo "nb-build: expected a .py file with # %% cells" >&2; exit 2;; esac
+
+# MPLBACKEND=Agg (handy for scripts) overrides the inline backend in a
+# kernel, and every figure silently disappears from the notebook.
+unset MPLBACKEND
+
+exec python3 - "$src" <<'PY'
+import sys, warnings
+from pathlib import Path
+warnings.filterwarnings("ignore")
+import jupytext, nbformat
+from nbclient import NotebookClient
+from nbclient.exceptions import CellExecutionError
+
+src = Path(sys.argv[1]).resolve()
+out = src.with_suffix(".ipynb")
+nb = jupytext.read(src)
+nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
+code_cells = [c for c in nb.cells if c.cell_type == "code"]
+client = NotebookClient(nb, timeout=120, startup_timeout=120, kernel_name="python3",
+                        extra_arguments=["--IPKernelApp.log_level=ERROR"],
+                        resources={"metadata": {"path": str(src.parent)}})
+try:
+    client.execute()
+except CellExecutionError:
+    failed = next((c for c in code_cells
+                   if any(o.get("output_type") == "error" for o in c.get("outputs", []))), None)
+    nbformat.write(nb, out)
+    print(f"FAILED: {out.name} saved up to the failing cell. Fix {src.name} and re-run nb-build.", file=sys.stderr)
+    if failed is not None:
+        err = next(o for o in failed.outputs if o.get("output_type") == "error")
+        n = code_cells.index(failed) + 1
+        print(f"\n--- code cell {n} of {len(code_cells)} ---\n{failed.source}\n---", file=sys.stderr)
+        print(f"{err['ename']}: {err['evalue']}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:  # kernel failed to start, timeout, ...
+    print(f"FAILED: could not run the notebook: {type(e).__name__}: {e}", file=sys.stderr)
+    print("Check: jupyter kernelspec list (expects python3)", file=sys.stderr)
+    sys.exit(1)
+nbformat.write(nb, out)
+print(f"OK: {out} ({len(code_cells)} code cells executed). Open it in VS Code.")
+PY

@@ -1,0 +1,17 @@
+# Who may use the model at all. Narrow `groups` to e.g. a "coder-admins"
+# group to make the point that access is an OpenShift AI decision.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: qwen25-14b-access
+  namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Qwen2.5 14B access"
+spec:
+  modelRefs:
+    - name: qwen25-14b
+      namespace: llm
+  subjects:
+    groups:
+      - name: system:authenticated
+    users: []

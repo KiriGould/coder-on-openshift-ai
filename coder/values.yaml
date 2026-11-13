@@ -1,0 +1,117 @@
+# Helm values for the Coder control plane on OpenShift.
+#
+# First tuned on OpenShift 4.22 with PodSecurity restricted:latest. Nothing
+# here is cluster-specific: CODER_DOMAIN is filled in by deploy.sh, and the UID
+# is left to restricted-v2.
+#
+# Install with coder/deploy.sh, which also generates the DB secret.
+
+coder:
+  # The Route terminates TLS; the Service stays plain HTTP inside the cluster.
+  service:
+    type: ClusterIP
+
+  securityContext:
+    runAsNonRoot: true
+    # Left null on purpose. OpenShift's SCC admission assigns a UID from this
+    # project's range. Hardcoding a UID means the manifest
+    # breaks the moment it is applied to a different namespace, because every
+    # project gets a different range.
+    runAsUser: null
+    runAsGroup: null
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+
+  env:
+    # readOnlyRootFilesystem: true means Coder cannot write its default cache
+    # under /home/coder/.cache. Redirect it to the emptyDir mounted at /tmp.
+    - name: CODER_CACHE_DIRECTORY
+      value: /tmp/coder
+
+    - name: CODER_ACCESS_URL
+      # Replaced at install time by coder/deploy.sh with the cluster ingress domain.
+      value: "https://coder.CODER_DOMAIN"
+
+    # CODER_WILDCARD_ACCESS_URL is deliberately NOT set.
+    # It needs wildcard Routes, which OpenShift's router rejects unless the
+    # IngressController is patched with ROUTER_ALLOW_WILDCARD_ROUTES=true.
+    # Without it you lose per-port workspace app subdomains; everything else,
+    # including VS Code Web, works fine. See README before enabling.
+
+    # The Route terminates TLS and forwards plain HTTP. Without trusting the
+    # forwarded headers Coder thinks the connection is insecure and VS Code
+    # Web websockets die with close code 1006.
+    - name: CODER_PROXY_TRUSTED_HEADERS
+      value: "X-Forwarded-For,X-Forwarded-Proto,X-Forwarded-Host"
+
+    - name: CODER_PG_CONNECTION_URL
+      valueFrom:
+        secretKeyRef:
+          name: coder-db-url
+          key: url
+
+    # --- AI -----------------------------------------------------------
+    # Providers, models and MCP servers for Coder Agents are NOT configured
+    # here: they live in the database and are added under Admin settings ->
+    # AI (QUICKSTART step 6). Coder Agents work on Community.
+    #
+    # CODER_AI_GATEWAY_ENABLED is deliberately NOT set: it turns on Coder's AI
+    # Gateway (AI Bridge), a Premium feature ("aibridge" in /api/v2/entitlements).
+    # Without a license the UI then asks for Premium. Here OpenShift AI MaaS is
+    # the model gateway, so Coder's own is not needed.
+
+    # Trust the cluster's ingress CA. Coder calls the model and the tools
+    # through their Routes -- https://maas.<domain> (MaaS gateway) and
+    # https://mcp.<domain> (MCP gateway) -- and on a cluster with the default
+    # self-signed ingress certificate those fail x509 verification without it.
+    # deploy.sh copies the CA into the `ingress-ca` ConfigMap mounted below.
+    #
+    # SSL_CERT_DIR (not SSL_CERT_FILE) on purpose: Go treats SSL_CERT_FILE as
+    # a REPLACEMENT for the system bundle. SSL_CERT_DIR takes a colon-separated
+    # list, so the system roots stay. The service CA is kept for the
+    # direct-to-Service fallbacks in the QUICKSTART appendix.
+    - name: SSL_CERT_DIR
+      value: "/etc/ssl/certs:/etc/ingress-ca:/var/run/secrets/kubernetes.io/serviceaccount"
+
+    # Coder blocks MCP connections to private IP addresses (SSRF protection,
+    # since 2.39.1). Inside the cluster the MCP gateway's Route,
+    # https://mcp.<domain>/mcp, resolves to the ingress address -- a private IP
+    # (on a single-node cluster, the node's own IP) -- so without this every
+    # chat logs "blocked: <ip> is not allowed by the destination policy" and
+    # the Weather tools silently disappear. deploy.sh resolves mcp.<domain>
+    # from inside the cluster and exempts exactly that address (/32). The line
+    # is dropped when there is nothing to exempt.
+    - name: CODER_MCP_ALLOWED_PRIVATE_CIDRS   # MCP_CIDRS_LINE
+      value: "__MCP_CIDRS__"
+
+  volumes:
+    - name: cache
+      emptyDir:
+        sizeLimit: 1Gi
+    - name: ingress-ca
+      configMap:
+        name: ingress-ca
+        optional: true
+
+  volumeMounts:
+    - name: cache
+      mountPath: /tmp
+      readOnly: false
+    - name: ingress-ca
+      mountPath: /etc/ingress-ca
+      readOnly: true
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+  # The chart's default Ingress is unused; an OpenShift Route is created
+  # separately by coder/02-route.yaml.
+  ingress:
+    enable: false

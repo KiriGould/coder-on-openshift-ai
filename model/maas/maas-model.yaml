@@ -1,0 +1,13 @@
+# Publishes the LLMInferenceService in the MaaS catalog.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: qwen25-14b
+  namespace: llm
+  annotations:
+    openshift.io/display-name: "Qwen2.5 14B Instruct (AWQ)"
+    openshift.io/description: "Agent model for Coder Agents: tool calling on, 40k context"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: qwen25-14b

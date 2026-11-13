@@ -1,0 +1,26 @@
+# How much they may use it: a token rate limit, enforced at the MaaS gateway.
+#
+# Sized for an agent. The rhoai-maas-guide "free" tier is 100 tokens/min;
+# one Coder Agents request is several thousand prompt tokens, so that tier
+# returns 429 on the very first chat. Lower this live during the demo to show
+# OpenShift AI throttling Coder.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: qwen25-14b-coder
+  namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Qwen2.5 14B — Coder Agents"
+    openshift.io/description: "200k tokens/min for coding agents"
+spec:
+  owner:
+    groups:
+      - name: system:authenticated
+    users: []
+  modelRefs:
+    - name: qwen25-14b
+      namespace: llm
+      tokenRateLimits:
+        - limit: 200000
+          window: 1m
+  priority: 10

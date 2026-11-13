@@ -1,0 +1,68 @@
+---
+# The weather MCP server, self-hosted in the cluster.
+#
+# Built in-cluster from mcp/weather/ by ./apply.sh. Clients reach it through
+# the MCP gateway (03-gateway-registration.yaml), not directly. Needs egress to
+# api.open-meteo.com, archive-api.open-meteo.com and
+# geocoding-api.open-meteo.com -- the one thing in this quickstart that leaves
+# the cluster. Requests carry a place name, coordinates and a date range.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-servers
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-mcp
+  namespace: mcp-servers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: weather-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: weather-mcp
+    spec:
+      # Needs no Kubernetes API access at all.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: image-registry.openshift-image-registry.svc:5000/mcp-servers/weather-mcp:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Row cap for history(). Raise it only if the model's context can
+            # take it: ~6 tokens per row per variable.
+            - name: MAX_ROWS
+              value: "240"
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 20m,  memory: 64Mi}
+            limits:   {cpu: 500m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-mcp
+  namespace: mcp-servers
+spec:
+  selector:
+    app.kubernetes.io/name: weather-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

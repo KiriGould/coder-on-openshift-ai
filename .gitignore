@@ -1,0 +1,18 @@
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Python / Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Terraform state from local template checks
+.terraform/
+.terraform.lock.hcl
+*.tfstate*
+
+# Screen recordings from headless test runs
+*.webm
+

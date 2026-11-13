@@ -1,0 +1,22 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: coder
+  namespace: coder
+  annotations:
+    # Coder holds long-lived websockets for terminals, VS Code Web and the
+    # agent connection. The router's 30s default would tear them down
+    # mid-session.
+    haproxy.router.openshift.io/timeout: 1h
+spec:
+  # Replaced at apply time by coder/deploy.sh with the cluster ingress domain.
+  host: coder.CODER_DOMAIN
+  to:
+    kind: Service
+    name: coder
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

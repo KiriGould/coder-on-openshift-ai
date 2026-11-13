@@ -1,0 +1,21 @@
+# Red Hat Connectivity Link 1.5: provides the MCP gateway (mcp.kuadrant.io/v1).
+# Skip this if your cluster already has it (the OpenShift AI MaaS install
+# subscribes to it too).
+#
+#   oc apply -f mcp/00-rhcl-operator.yaml
+#
+# One operator for the whole cluster, in openshift-operators. It deploys the
+# MCP gateway controller itself (tracked by the cluster-scoped
+# KuadrantControlPlane "default"); no Kuadrant CR is needed unless you add
+# AuthPolicies (QUICKSTART Appendix B).
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: rhcl-operator
+  namespace: openshift-operators
+spec:
+  channel: stable-1.5
+  installPlanApproval: Automatic
+  name: rhcl-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace

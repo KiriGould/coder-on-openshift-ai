@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm
+  labels:
+    # Without this the model serves fine but is invisible in the dashboard.
+    opendatahub.io/dashboard: "true"
+    # The MaaS gateway only admits HTTPRoutes from namespaces with this label.
+    maas.opendatahub.io/gateway-access: "true"
